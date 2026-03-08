@@ -1,0 +1,7 @@
+uploads/
+outputs/
+crop_production_subset.csv/
+crop_yield.csv/
+tfenv/
+.venv/
+__pycache__/
