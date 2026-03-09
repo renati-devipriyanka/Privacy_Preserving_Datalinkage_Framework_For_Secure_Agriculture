@@ -14,27 +14,14 @@ from tensorflow import keras
 from keras import layers
 
 
-def run_privacy_framework(dataset_path, ui_sensitive_cols=""):
+# ============================================================
+# NEW FUNCTION: Sensitive Attribute Detection
+# Flask can call this separately
+# ============================================================
 
-    print("🌾 Privacy-Preserving Agriculture Data Framework")
-
-    if not os.path.exists(dataset_path):
-        print("❌ Dataset file does not exist")
-        return "Dataset file not found"
+def detect_sensitive_attributes(dataset_path):
 
     df = pd.read_csv(dataset_path)
-    raw_df = df.copy()
-
-    print("✅ Dataset loaded successfully")
-    print("Dataset shape:", df.shape)
-    print("Columns:", df.columns.tolist())
-
-    # ============================================================
-    # Sensitive Attribute Detection
-    # ============================================================
-
-    print("\n🔐 Sensitive Attribute Detection")
-
     all_columns = df.columns.tolist()
 
     rule_keywords = [
@@ -51,24 +38,6 @@ def run_privacy_framework(dataset_path, ui_sensitive_cols=""):
         if any(key in col.lower() for key in rule_keywords)
     }
 
-    print("✔ Rule-based detected sensitive attributes:")
-    print(rule_based_sensitive)
-
-    # UI based attributes
-    user_selected_sensitive=set()
-
-    if ui_sensitive_cols:
-        user_selected_sensitive=set(
-            col.strip() for col in ui_sensitive_cols.split(",")
-        )
-
-        print("✔ Sensitive attributes selected from UI:")
-        print(user_selected_sensitive)
-
-    else:
-        print("ℹ No sensitive attributes selected from UI")
-
-    # Heuristic detection
     heuristic_sensitive=set()
     row_count=len(df)
 
@@ -76,18 +45,54 @@ def run_privacy_framework(dataset_path, ui_sensitive_cols=""):
         if df[col].nunique()/row_count > 0.95:
             heuristic_sensitive.add(col)
 
-    print("✔ Heuristic detected attributes:")
-    print(heuristic_sensitive)
+    sensitive_columns=list(rule_based_sensitive | heuristic_sensitive)
 
-    SENSITIVE_COLUMNS=(
-        rule_based_sensitive |
-        user_selected_sensitive |
-        heuristic_sensitive
-    )
+    return sensitive_columns
+
+
+# ============================================================
+# MAIN FRAMEWORK FUNCTION
+# ============================================================
+
+def run_privacy_framework(dataset_path, ui_sensitive_cols=None):
+
+    print("🌾 Privacy-Preserving Agriculture Data Framework")
+
+    if not os.path.exists(dataset_path):
+        print("❌ Dataset file does not exist")
+        return "Dataset file not found"
+
+    df = pd.read_csv(dataset_path)
+    raw_df = df.copy()
+
+    print("✅ Dataset loaded successfully")
+    print("Dataset shape:", df.shape)
+
+    # ============================================================
+    # Sensitive Attribute Detection
+    # ============================================================
+
+    print("\n🔐 Sensitive Attribute Detection")
+
+    auto_detected = set(detect_sensitive_attributes(dataset_path))
+
+    print("✔ Automatically detected attributes:")
+    print(auto_detected)
+
+    user_selected_sensitive=set()
+
+    if ui_sensitive_cols:
+        user_selected_sensitive=set(ui_sensitive_cols)
+
+        print("✔ User selected attributes:")
+        print(user_selected_sensitive)
+
+    SENSITIVE_COLUMNS = auto_detected | user_selected_sensitive
 
     print("\n🔒 FINAL SENSITIVE ATTRIBUTES:")
     for col in SENSITIVE_COLUMNS:
         print("-",col)
+
 
     # ============================================================
     # Data Preprocessing
@@ -214,70 +219,13 @@ def run_privacy_framework(dataset_path, ui_sensitive_cols=""):
     sil_score=silhouette_score(X_encoded,gmm_labels)
 
     # ============================================================
-    # Privacy Preserving Output
+    # Final Dataset
     # ============================================================
 
     final_df=raw_df.copy()
-
-    state_cols=[c for c in final_df.columns if c in SENSITIVE_COLUMNS and 'state' in c.lower()]
-
-    if state_cols:
-
-        state_col=state_cols[0]
-
-        state_clean=final_df[state_col].astype(str).str.lower().str.strip()
-
-        region_map={
-            'andhra pradesh':'South India',
-            'telangana':'South India',
-            'tamil nadu':'South India',
-            'karnataka':'South India',
-            'kerala':'South India',
-            'uttar pradesh':'North India',
-            'punjab':'North India',
-            'haryana':'North India',
-            'bihar':'East India',
-            'odisha':'East India',
-            'west bengal':'East India',
-            'gujarat':'West India',
-            'rajasthan':'West India',
-            'maharashtra':'West India',
-            'madhya pradesh':'Central India',
-            'chhattisgarh':'Central India'
-        }
-
-        final_df['Region']=state_clean.map(region_map).fillna('Other India')
-
-        final_df.drop(columns=[state_col],inplace=True)
-
-    if 'Area' in final_df.columns and 'Area' in SENSITIVE_COLUMNS:
-
-        final_df['Land_Group']=final_df['Area'].apply(
-            lambda x:"0-1" if x<1 else "1-2" if x<2 else "2-3" if x<3 else "3+"
-        )
-
-        final_df.drop(columns=['Area'],inplace=True)
-
-    if 'Production' in final_df.columns and 'Production' in SENSITIVE_COLUMNS:
-
-        final_df['Yield_Range']=final_df['Production'].apply(
-            lambda x:"Low" if x<2000 else "Medium" if x<4000 else "High"
-        )
-
-        final_df.drop(columns=['Production'],inplace=True)
-
-    for col in heuristic_sensitive:
-        if col in final_df.columns:
-            final_df.drop(columns=[col],inplace=True)
-
     final_df['Cluster']=gmm_labels
 
-    # ============================================================
-    # Save Output
-    # ============================================================
-
     OUTPUT_DIR="outputs"
-
     os.makedirs(OUTPUT_DIR,exist_ok=True)
 
     dataset_name=os.path.splitext(os.path.basename(dataset_path))[0]
@@ -291,65 +239,19 @@ def run_privacy_framework(dataset_path, ui_sensitive_cols=""):
 
     print("\n🎉 OUTPUT SAVED:",output_path)
 
-    # ============================================================
-    # Save Graphs
-    # ============================================================
-
-    GRAPH_DIR=os.path.join(OUTPUT_DIR,"graphs")
-
-    os.makedirs(GRAPH_DIR,exist_ok=True)
-
-    plt.figure(figsize=(8,5))
-    plt.plot(np.cumsum(pca.explained_variance_ratio_),marker='o')
-    plt.xlabel("Principal Components")
-    plt.ylabel("Explained Variance")
-    plt.title("PCA Explained Variance")
-    plt.grid(True)
-    plt.savefig(os.path.join(GRAPH_DIR,"pca_variance.png"),dpi=300)
-    plt.close()
-
-    plt.figure(figsize=(8,5))
-    pd.Series(gmm_labels).value_counts().sort_index().plot(kind='bar')
-    plt.title("GMM Cluster Distribution")
-    plt.savefig(os.path.join(GRAPH_DIR,"gmm_clusters.png"),dpi=300)
-    plt.close()
-
-    plt.figure(figsize=(8,5))
-
-    privacy_levels=[0.2,0.4,0.6,0.8]
-
-    accuracy_scores=[
-        sil_score-0.15,
-        sil_score-0.08,
-        sil_score,
-        min(sil_score+0.05,1.0)
-    ]
-
-    plt.plot(privacy_levels,accuracy_scores,marker='o')
-
-    plt.xlabel("Privacy Level")
-    plt.ylabel("Clustering Accuracy")
-    plt.title("Privacy vs Utility Tradeoff")
-
-    plt.grid(True)
-
-    plt.savefig(os.path.join(GRAPH_DIR,"privacy_vs_utility.png"),dpi=300)
-
-    plt.close()
-
     return output_path
-
-
-# ============================================================
-# CLI Runner (Optional)
-# ============================================================
-
 if __name__ == "__main__":
 
-    if len(sys.argv) > 1:
+    if len(sys.argv) >= 2:
 
-        run_privacy_framework(sys.argv[1])
+        dataset_path = sys.argv[1]
+
+        sensitive_cols = None
+
+        if len(sys.argv) >= 3:
+            sensitive_cols = sys.argv[2].split(",")
+
+        run_privacy_framework(dataset_path, sensitive_cols)
 
     else:
-
         print("Please provide dataset path")
